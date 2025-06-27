@@ -1,0 +1,8 @@
+
+{
+    "files.eol": "\n",
+    "problems.autoReveal": true,
+    "problems.showCurrentInStatus": false,
+    "problems.sortOrder": "severity",
+    "problems.visibility": true
+}
