@@ -26,7 +26,7 @@
 
 ;; data maps
 (define-map admins principal bool)
-(define-map locked-pxt principal uint)
+(define-map locked-pxt principal {amount: uint, time: uint})
 ;;
 
 ;; read only functions
@@ -37,7 +37,11 @@
 (define-read-only (get-token-uri) (ok none))
 (define-read-only (get-total-supply) (ok (ft-get-supply propertyX)))
 (define-read-only (is-admin (user principal)) (default-to false (map-get? admins user)))
-(define-read-only (get-locked-pxt (who principal)) (ok (default-to u0 (map-get? locked-pxt who))))
+(define-read-only (get-locked-pxt (who principal)) 
+    (let ((lockedPxt (map-get? locked-pxt who)))
+        (ok (default-to u0 (get amount lockedPxt)))
+    )
+)
 ;;
 
 
@@ -99,29 +103,46 @@
         (ok true))
 )
 
-(define-public (lock-pxt (amount uint))
+(define-public (lock-pxt (amount uint) (lock-height uint))
     (begin 
         (asserts! (> amount u0) err-insufficient-amount)
         (asserts! (<= amount (ft-get-balance propertyX tx-sender)) err-insufficient-amount)
         (try! (ft-transfer? propertyX amount tx-sender (as-contract tx-sender)))
-        (let ((current-locked (default-to u0 (map-get? locked-pxt tx-sender))))
-            (map-set locked-pxt tx-sender (+ current-locked amount)))
+        (let ((current-locked (map-get? locked-pxt tx-sender)))
+            (map-set locked-pxt tx-sender { amount: (+ (default-to u0 (get amount current-locked)) amount), time:lock-height }))
         
         (print { event-type: "LockPXT", amount: amount, user: tx-sender })
         (ok true)
     )
 )
 
+;; (define-public (unlock-pxt (amount uint))
+;;     (begin 
+;;         (asserts! (> amount u0) err-insufficient-amount)
+;;         (let ((user-locked (map-get? locked-pxt tx-sender)))
+;;             (asserts! (<= amount (default-to u0 (get amount user-locked))) err-insufficient-amount)
+;;             (try! (as-contract (ft-transfer? propertyX amount (as-contract tx-sender) tx-sender)))
+;;             (map-set locked-pxt tx-sender {  amount:(- (get amount user-locked) amount), time: (get time user-locked)}) 
+;;             (print { event-type: "UnlockPXT", amount: amount, user: tx-sender })
+;;             (ok true)
+;;         )
+;;     )
+;; )
+
 (define-public (unlock-pxt (amount uint))
-    (begin 
-        (asserts! (> amount u0) err-insufficient-amount)
-        (let ((user-locked (default-to u0 (map-get? locked-pxt tx-sender))))
-            (asserts! (<= amount user-locked) err-insufficient-amount)
-            (try! (as-contract (ft-transfer? propertyX amount (as-contract tx-sender) tx-sender)))
-            (map-set locked-pxt tx-sender (- user-locked amount)) 
-            (print { event-type: "UnlockPXT", amount: amount, user: tx-sender })
-            (ok true)
-        )
+  (begin 
+    (asserts! (> amount u0) err-insufficient-amount)
+    (let ((user-locked (map-get? locked-pxt tx-sender)))
+      (let ((locked-amount (default-to u0 (get amount user-locked)))
+            (locked-time (default-to u0 (get time user-locked))))
+        (asserts! (<= amount locked-amount) err-insufficient-amount)
+        (try! (as-contract (ft-transfer? propertyX amount (as-contract tx-sender) tx-sender)))
+        (map-set locked-pxt tx-sender { amount: (- locked-amount amount), time: locked-time }) 
+        (print { event-type: "UnlockPXT", amount: amount, user: tx-sender })
+        (ok true)
+      )
     )
+  )
 )
+
 

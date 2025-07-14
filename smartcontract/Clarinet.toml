@@ -13,6 +13,18 @@ contract_id = 'ST1VZ3YGJKKC8JSSWMS4EZDXXJM7QWRBEZ0ZWM64E.real-World-Asset-Trait'
 
 [[project.requirements]]
 contract_id = 'ST390VFVZJA4WP7QSZN0RTSGQDAG2P9NPN3X1ATDX.pxttest1'
+
+[[project.requirements]]
+contract_id = 'STM6S3AESTK9NAYE3Z7RS00T11ER8JJCDNTKG711.nft-trait'
+
+[[project.requirements]]
+contract_id = 'STM6S3AESTK9NAYE3Z7RS00T11ER8JJCDNTKG711.sip-010-trait'
+
+[[project.requirements]]
+contract_id = 'SP2PABAF9FTAJYNFZH93XENAJ8FVY99RRM50D2JG9.nft-trait'
+
+[[project.requirements]]
+contract_id = 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard'
 [contracts.Apttokens]
 path = 'contracts/Apttokens.clar'
 clarity_version = 3
@@ -25,6 +37,16 @@ epoch = 3.1
 
 [contracts.Token]
 path = 'contracts/Token.clar'
+clarity_version = 3
+epoch = 3.1
+
+[contracts.marketplace]
+path = 'contracts/marketplace.clar'
+clarity_version = 3
+epoch = 3.1
+
+[contracts.marketplace-ft-holder]
+path = 'contracts/marketplace-ft-holder.clar'
 clarity_version = 3
 epoch = 3.1
 
