@@ -58,120 +58,187 @@ export default function DeployToken() {
       }
       
       const response = await request('stx_deployContract', {
-        name: 'KYCtest1',
+        name: 'Marketplace1',
         clarityCode: `
 
-;; title: KYC
-;; version:1
-;; summary: This is the KYC contract which stores user and asset KYC data for those who want to tokenize assets or buy APT tokens. It excludes users intending to buy PXT tokens.
+;; Makrketplace contract where users can list, unlist and can sell their nfts
+;; clarity version 3
 
-;;Reamainig work after the Token contract deployed
-;; 1. i have to imports all the admins owner will add for the verifications of kyc. For now the contract is not deplooyed to when i was using moke address, it clearly shows error so this task will be done later.
+(define-constant contract 'ST390VFVZJA4WP7QSZN0RTSGQDAG2P9NPN3X1ATDX.SimpleNFT)
+(define-constant contract-owner tx-sender)
+(define-constant PLATFORM-FEE-BPS  u250) ;;2.5% basic fee for now
 
-(define-constant PXT-contract 'ST390VFVZJA4WP7QSZN0RTSGQDAG2P9NPN3X1ATDX.pxttest1)
-;;errors
-(define-constant err-kyc-not-found (err u101))
-(define-constant err-kyc-already-approved (err u102))
-(define-constant err-kyc-not-pending (err u103))
-(define-constant err-owner-or-admin-only (err u104))
-;;
-
-;; data vars
-(define-data-var contract-owner principal tx-sender)
-;;
-
-;; data maps
-(define-map whitelist principal bool)
-(define-map whitelist-assets principal bool)
-(define-map kyc-submissions-users principal {ipfs-hash: (string-utf8 100), status: (string-utf8 20)})
-(define-map kyc-submissions-assets principal {ipfs-hash: (string-utf8 100), status: (string-utf8 20)})
-;;
+;;eRROR
+(define-constant ERR-NOT-AUTHORIZED (err u401))
+(define-constant ERR-LISTING-EXPIRED (err u402))
+(define-constant ERR-PRICE-MISMATCHED (err u403))
+(define-constant ERR-ALREADY-LISTED (err u404))
+(define-constant ERR-NFT-TRANSFER-FAILED (err u405))
+(define-constant ERR-NOT-FOUND (err u406))
+(define-constant ERR-OWNER-CANNOT-BUY (err u407))
+(define-constant ERR-INSUFFICIENT-FUNDS (err u408))
 
 
-;;Read only functions
-(define-read-only (is-eligible-for-apt (user principal)) (default-to false (map-get? whitelist user)))
-(define-read-only (is-eligible-to-tokenize (user principal)) (and (default-to false (map-get? whitelist user)) (default-to false  (map-get? whitelist-assets user))))
-;;
 
+;;Data structures
+(define-map listings {token-id: uint} 
+    {seller: principal, price: uint, expiry: uint, is-active: bool}
+)
 
-;; public functions
-;; Kyc functions for the user
-(define-public (submit-kyc-of-user (ipfs-hash (string-utf8 100)))
-  (begin
-    (let ((empty-kyc (tuple (ipfs-hash u"")  (status u"none"))))
-    (asserts! (is-eq (get status (default-to empty-kyc (map-get? kyc-submissions-users tx-sender))) u"none") err-kyc-already-approved))
-    (map-set kyc-submissions-users tx-sender (tuple (ipfs-hash ipfs-hash) (status u"pending")))
-    (print (tuple (event-type "UserKYCSubmitted") (user tx-sender) (ipfs-hash ipfs-hash)))
+;;Track paltform fee
+(define-data-var total-platform-fees  uint u0)
+
+;;check if token is listed
+(define-read-only (is-listed (token-id uint)) 
+    (match (map-get? listings { token-id: token-id})
+        listing (and (get is-active listing)
+            (< stacks-block-height (get expiry listing)))
+        false
+    )
+)
+
+;;get listing details if active
+(define-read-only (get-listing (token-id uint))
+    (map-get? listings {token-id: token-id})
+)
+
+;;calculate fees for the given amount
+(define-read-only (calculate-platform-fee (amount uint)) 
+    (/ (* amount PLATFORM-FEE-BPS) u10000)
+)
+;;get total platform fee of the platform
+(define-read-only (get-total-platform-fees) 
+    (var-get total-platform-fees)
+)
+
+;;listing functions
+;; list nft for sale
+(define-public (list-nft (token-id uint) (price uint) (expiry uint))
+  (let (
+    (nft-owner-opt (unwrap! (contract-call? contract get-owner token-id) (err u0)))
+  )
+    ;; Check if the owner is none
+    (asserts! (is-some nft-owner-opt) ERR-NOT-AUTHORIZED)
+    (let (
+      (nft-owner (unwrap! nft-owner-opt (err u0)))
+    )
+      ;; Validations
+      (asserts! (is-eq tx-sender nft-owner) ERR-NOT-AUTHORIZED)
+      (asserts! (> expiry stacks-block-height) ERR-LISTING-EXPIRED)
+      (asserts! (> price u0) ERR-PRICE-MISMATCHED)
+      (asserts! (not (is-listed token-id)) ERR-ALREADY-LISTED)
+
+      ;; Transfer NFT to this contract (escrow)
+      (unwrap! (contract-call? contract transfer token-id tx-sender (as-contract tx-sender)) ERR-NFT-TRANSFER-FAILED)
+      
+      ;; Create the listing
+      (map-set listings
+        { token-id: token-id }
+        { 
+          seller: tx-sender, 
+          price: price, 
+          expiry: expiry, 
+          is-active: true
+        }
+      )
+      
+      (ok true)
+    )
+  )
+)
+
+;;cancel a listings
+(define-public (cancel-listing (token-id uint))
+    (let (
+        (listing (unwrap! (map-get? listings { token-id: token-id}) ERR-NOT-FOUND))
+    )   
+    ;;only seller can cancel
+    (asserts! (is-eq tx-sender (get seller listing)) ERR-NOT-AUTHORIZED)
+    ;;ensure listing is active
+    (asserts! (get is-active listing) ERR-NOT-FOUND)
+
+    ;;Mark lisitng is inactive
+    (map-set listings {token-id: token-id} (merge listing {is-active: false}))
+
+    ;;Return nft to seller from escrow
+    (as-contract (contract-call? contract transfer token-id tx-sender (get seller listing))))
+)
+
+;; Purchase functions
+
+;; buy listed nft
+(define-public (buy-nft (token-id uint))
+  (let (
+    (listing (unwrap! (map-get? listings { token-id: token-id }) ERR-NOT-FOUND))
+    (price (get price listing))
+    (seller (get seller listing))
+    (platform-fee (calculate-platform-fee price))
+    (seller-amount (- price platform-fee))
+  )
+    ;; Check conditions
+    (asserts! (get is-active listing) ERR-NOT-FOUND)
+    (asserts! (< stacks-block-height (get expiry listing)) ERR-LISTING-EXPIRED)
+    (asserts! (not (is-eq tx-sender seller)) ERR-OWNER-CANNOT-BUY)
+    
+    ;; Update platform fees
+    (var-set total-platform-fees (+ (var-get total-platform-fees) platform-fee))
+    
+    ;; Mark listing as inactive
+    (map-set listings
+      { token-id: token-id }
+      (merge listing { is-active: false })
+    )
+    
+    ;; Pay seller
+    (unwrap! (stx-transfer? seller-amount tx-sender seller) ERR-INSUFFICIENT-FUNDS)
+    
+    ;; Pay platform fee
+    (unwrap! (stx-transfer? platform-fee tx-sender contract-owner) ERR-INSUFFICIENT-FUNDS)
+    
+    ;; Transfer NFT to buyer from escrow
+    (as-contract 
+      (contract-call? contract transfer token-id tx-sender tx-sender)
+    )
+  )
+)
+
+;; Update a listing's price
+(define-public (update-listing-price (token-id uint) (new-price uint))
+  (let (
+    (listing (unwrap! (map-get? listings { token-id: token-id }) ERR-NOT-FOUND))
+  )
+    ;; Validations
+    (asserts! (is-eq tx-sender (get seller listing)) ERR-NOT-AUTHORIZED)
+    (asserts! (get is-active listing) ERR-NOT-FOUND)
+    (asserts! (< stacks-block-height (get expiry listing)) ERR-LISTING-EXPIRED)
+    (asserts! (> new-price u0) ERR-PRICE-MISMATCHED)
+    
+    ;; Update the listing price
+    (map-set listings
+      { token-id: token-id }
+      (merge listing { price: new-price })
+    )
+    
     (ok true)
   )
 )
 
-;; Function to approve KYC (admin only)
-(define-public (approve-kyc-of-user (user principal))
-  (begin
-    (asserts! (and (is-eq tx-sender (var-get contract-owner)) (contract-call? PXT-contract is-admin tx-sender))  err-owner-or-admin-only) 
-    (let ((kyc-data (unwrap! (map-get? kyc-submissions-users user) err-kyc-not-found)))
-      (asserts! (is-eq (get status kyc-data) u"pending") err-kyc-not-pending)
-      (map-set kyc-submissions-users user (tuple (ipfs-hash (get ipfs-hash kyc-data)) (status u"approved")))
-      (map-set whitelist user true)
-      (print {event-type: "UserKYCApproved", user: user, by: tx-sender})
-      (ok true)
-    )
-  )
+;; Administration function to withdraw paltform fee
+
+(define-public (withdraw-platform-fee) 
+ (let (
+    (fee-amount (var-get total-platform-fees))
+ )
+ (asserts! (is-eq tx-sender contract-owner) ERR-NOT-AUTHORIZED)
+ (asserts! (> fee-amount u0) ERR-INSUFFICIENT-FUNDS)
+
+ ;;Reset counter
+ (var-set total-platform-fees u0)
+
+ ;; transfer funds to contract owner
+ (as-contract (stx-transfer? fee-amount tx-sender contract-owner))
+ )
 )
-
-;; Function to reject KYC (admin only)
-(define-public (reject-kyc-of-user (user principal) (reason (string-utf8 1000)))
-  (begin
-    (asserts! (and (is-eq tx-sender (var-get contract-owner)) (contract-call? PXT-contract is-admin tx-sender))  err-owner-or-admin-only) 
-    (let ((kyc-data (unwrap! (map-get? kyc-submissions-users user) err-kyc-not-found)))
-      (asserts! (is-eq (get status kyc-data) u"pending") err-kyc-not-pending)
-      (map-set kyc-submissions-users user (tuple (ipfs-hash (get ipfs-hash kyc-data)) (status u"rejected")))
-      (print {event-type: "UserKYCRejected", user: user, by: tx-sender, reason: reason})
-      (ok true)
-    )
-  )
-)
-
-;;Function to submit kyc for the assets
-(define-public (submit-kyc-for-assets (ipfs-hash (string-utf8 100)))
-  (begin 
-    (let ((empty-kyc (tuple (ipfs-hash u"")  (status u"none"))))
-    (asserts! (is-eq (get status (default-to empty-kyc (map-get? kyc-submissions-assets tx-sender))) u"none") err-kyc-already-approved))
-    (map-set kyc-submissions-assets tx-sender (tuple (ipfs-hash ipfs-hash) (status u"pending")))
-    (print (tuple (event-type "AssetsKYCSubmitted") (user tx-sender) (ipfs-hash ipfs-hash)))
-    (ok true)
-  )
-)
-
-;; Function to approve KYC (admin only)
-(define-public (approve-kyc-of-assets (user principal))
-  (begin
-    (asserts! (and (is-eq tx-sender (var-get contract-owner)) (contract-call? PXT-contract is-admin tx-sender))  err-owner-or-admin-only)
-    (let ((kyc-data (unwrap! (map-get? kyc-submissions-assets user) err-kyc-not-found)))
-      (asserts! (is-eq (get status kyc-data) u"pending") err-kyc-not-pending)
-      (map-set kyc-submissions-assets user (tuple (ipfs-hash (get ipfs-hash kyc-data)) (status u"approved")))
-      (map-set whitelist-assets user true)
-      (print {event-type: "AssetsKYCApproved", user: user, by: tx-sender})
-      (ok true)
-    )
-  )
-)
-
-;; Function to reject KYC (admin only)
-(define-public (reject-kyc-of-assets (user principal) (reason (string-utf8 1000)))
-  (begin
-    (asserts! (and (is-eq tx-sender (var-get contract-owner)) (contract-call? PXT-contract is-admin tx-sender))  err-owner-or-admin-only)
-    (let ((kyc-data (unwrap! (map-get? kyc-submissions-assets user) err-kyc-not-found)))
-      (asserts! (is-eq (get status kyc-data) u"pending") err-kyc-not-pending)
-      (map-set kyc-submissions-assets user (tuple (ipfs-hash (get ipfs-hash kyc-data)) (status u"rejected")))
-      (print {event-type: "AssetsKYCRejected", user: user, by: tx-sender, reason: reason})
-      (ok true)
-    )
-  )
-)
-
-
 ` ,
         clarityVersion: '3',
         network: 'testnet'

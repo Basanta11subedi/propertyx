@@ -12,6 +12,7 @@
 (define-constant err-kyc-already-approved (err u102))
 (define-constant err-kyc-not-pending (err u103))
 (define-constant err-owner-or-admin-only (err u104))
+(define-constant err-owner-only (err u105))
 ;;
 
 ;; data vars
@@ -107,4 +108,11 @@
       (ok true)
     )
   )
+)
+
+
+(define-read-only (get-contract-owner)
+  (begin 
+  (asserts! (is-eq tx-sender (var-get contract-owner)) err-owner-only)
+  (ok true))
 )
